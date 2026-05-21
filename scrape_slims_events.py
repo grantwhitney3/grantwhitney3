@@ -2,8 +2,9 @@
 """Scrape Slim's Dive Bar events into a CSV file.
 
 The events page uses JavaScript pagination, so this script drives a headless
-browser, clicks the Modern Events Calendar "Load More" button until it is
-exhausted, and then extracts the event cards that are present in the DOM.
+browser, clicks the Modern Events Calendar "Load More" button for the
+configured number of batches, and then extracts the event cards that are present
+in the DOM.
 """
 
 from __future__ import annotations
@@ -86,8 +87,8 @@ def wait_for_calendar_ready(page: Any, timeout_ms: int) -> None:
     )
 
 
-def click_all_load_more(page: Any, max_clicks: int) -> None:
-    """Click the scoped events load-more button until it disappears or stalls."""
+def click_load_more(page: Any, max_clicks: int) -> None:
+    """Click the scoped events load-more button up to the configured limit."""
     for _ in range(max_clicks):
         button = page.locator(LOAD_MORE_SELECTOR).first
         try:
@@ -125,7 +126,6 @@ def click_all_load_more(page: Any, max_clicks: int) -> None:
             current_count = page.locator(EVENT_SELECTOR).count()
             if current_count <= previous_count:
                 return
-    raise RuntimeError(f"Stopped after {max_clicks} load-more clicks")
 
 
 def extract_events(page: Any) -> list[dict[str, str]]:
@@ -215,7 +215,7 @@ def scrape_events(
             page.goto(url, wait_until="load", timeout=timeout_ms)
             page.wait_for_selector(EVENT_SELECTOR, timeout=timeout_ms)
             wait_for_calendar_ready(page, timeout_ms=timeout_ms)
-            click_all_load_more(page, max_clicks=max_clicks)
+            click_load_more(page, max_clicks=max_clicks)
             return extract_events(page)
         finally:
             browser.close()
@@ -242,9 +242,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--max-clicks",
-        default=50,
+        default=1,
         type=int,
-        help="Maximum number of Load More clicks before stopping",
+        help="Number of Load More clicks to perform before scraping rows",
     )
     parser.add_argument(
         "--timeout-ms",
