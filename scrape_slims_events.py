@@ -71,6 +71,21 @@ def event_has_drink_specials(*values: str) -> str:
     return "yes" if "drink special" in haystack else "no"
 
 
+def wait_for_calendar_ready(page: Any, timeout_ms: int) -> None:
+    """Wait until the page's calendar JavaScript has bound the Load More click."""
+    page.wait_for_function(
+        """(buttonSelector) => {
+            const button = document.querySelector(buttonSelector);
+            if (!button) return false;
+            if (!window.jQuery) return true;
+            const events = window.jQuery._data(button, "events");
+            return !!(events && events.click && events.click.length);
+        }""",
+        arg=LOAD_MORE_SELECTOR,
+        timeout=timeout_ms,
+    )
+
+
 def click_all_load_more(page: Any, max_clicks: int) -> None:
     """Click the scoped events load-more button until it disappears or stalls."""
     for _ in range(max_clicks):
@@ -83,21 +98,27 @@ def click_all_load_more(page: Any, max_clicks: int) -> None:
 
         previous_count = page.locator(EVENT_SELECTOR).count()
         button.scroll_into_view_if_needed(timeout=5_000)
-        button.click(timeout=10_000)
+        try:
+            with page.expect_response(
+                lambda response: "admin-ajax.php" in response.url,
+                timeout=15_000,
+            ):
+                button.click(timeout=10_000)
+        except PlaywrightTimeoutError:
+            current_count = page.locator(EVENT_SELECTOR).count()
+            if current_count <= previous_count:
+                return
 
         try:
             page.wait_for_function(
-                """([eventSelector, buttonSelector, previousCount]) => {
+                """([eventSelector, previousCount]) => {
                     const eventCount = document.querySelectorAll(eventSelector).length;
-                    const button = document.querySelector(buttonSelector);
-                    const buttonVisible = !!button && !!(
-                        button.offsetWidth ||
-                        button.offsetHeight ||
-                        button.getClientRects().length
+                    const noEvents = document.querySelector(
+                        ".mec-skin-list-no-events-container:not(.mec-util-hidden)"
                     );
-                    return eventCount > previousCount || !buttonVisible;
+                    return eventCount > previousCount || !!noEvents;
                 }""",
-                arg=[EVENT_SELECTOR, LOAD_MORE_SELECTOR, previous_count],
+                arg=[EVENT_SELECTOR, previous_count],
                 timeout=15_000,
             )
         except PlaywrightTimeoutError:
@@ -191,8 +212,9 @@ def scrape_events(
         try:
             page = browser.new_page()
             page.set_default_timeout(timeout_ms)
-            page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            page.goto(url, wait_until="load", timeout=timeout_ms)
             page.wait_for_selector(EVENT_SELECTOR, timeout=timeout_ms)
+            wait_for_calendar_ready(page, timeout_ms=timeout_ms)
             click_all_load_more(page, max_clicks=max_clicks)
             return extract_events(page)
         finally:
