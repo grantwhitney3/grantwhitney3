@@ -14,7 +14,7 @@ import csv
 import re
 import shutil
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -46,16 +46,26 @@ def detect_chrome() -> str | None:
     return None
 
 
-def parse_event_date(date_label: str, month_heading: str) -> str:
-    """Return an ISO date when the calendar's date and month heading allow it."""
+def parse_event_date(
+    date_label: str,
+    month_heading: str,
+    fallback_year: int | None = None,
+    previous_date: date | None = None,
+) -> date | str:
+    """Return an ISO-ready date when the calendar provides enough context."""
     year_match = re.search(r"\b(\d{4})\b", month_heading)
-    if not year_match:
+    year = int(year_match.group(1)) if year_match else fallback_year
+    if not year:
         return clean_text(f"{date_label} {month_heading}")
 
-    date_with_year = f"{date_label} {year_match.group(1)}"
+    date_with_year = f"{date_label} {year}"
     for fmt in ("%d %b %Y", "%d %B %Y", "%B %d %Y", "%b %d %Y"):
         try:
-            return datetime.strptime(date_with_year, fmt).date().isoformat()
+            parsed_date = datetime.strptime(date_with_year, fmt).date()
+            if previous_date:
+                while parsed_date < previous_date:
+                    parsed_date = parsed_date.replace(year=parsed_date.year + 1)
+            return parsed_date
         except ValueError:
             pass
     return clean_text(date_with_year)
@@ -161,12 +171,22 @@ def extract_events(page: Any) -> list[dict[str, str]]:
 
     events = []
     seen: set[tuple[str, str, str]] = set()
+    fallback_year: int | None = None
+    previous_date: date | None = None
     for raw_event in raw_events:
         name = clean_text(raw_event.get("name"))
-        date = parse_event_date(
+        parsed_date = parse_event_date(
             clean_text(raw_event.get("date_label")),
             clean_text(raw_event.get("month_heading")),
+            fallback_year=fallback_year,
+            previous_date=previous_date,
         )
+        if isinstance(parsed_date, date):
+            fallback_year = parsed_date.year
+            previous_date = parsed_date
+            event_date = parsed_date.isoformat()
+        else:
+            event_date = parsed_date
         time = build_time_range(
             clean_text(raw_event.get("start_time")),
             clean_text(raw_event.get("end_time")),
@@ -175,14 +195,14 @@ def extract_events(page: Any) -> list[dict[str, str]]:
         description = clean_text(raw_event.get("description"))
         article_text = clean_text(raw_event.get("article_text"))
 
-        key = (name, date, time)
+        key = (name, event_date, time)
         if not name or key in seen:
             continue
         seen.add(key)
         events.append(
             {
                 "event name": name,
-                "date": date,
+                "date": event_date,
                 "time": time,
                 "event type": event_type,
                 "has drink specials": event_has_drink_specials(
